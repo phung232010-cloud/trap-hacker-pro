@@ -1,2 +1,0 @@
-# trap-hacker-pro
-vuýp
